@@ -10,6 +10,10 @@ import google.generativeai as genai
 import numpy as np
 import chromadb
 from chromadb.config import Settings
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,8 +63,11 @@ def process_documents(
     # Initialize embedding model
     logger.info("Configuring Gemini embedding model...")
     if embedding_model == "gemini":
+        # Get API key from parameter or environment variable
         if not api_key:
-            raise ValueError("API key is required for Gemini embedding model")
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("API key is required for Gemini embedding model. Provide it as parameter or set GEMINI_API_KEY in .env file")
         genai.configure(api_key=api_key)
         # Use the embedding model directly
         embedding_model_name = "models/embedding-001"
@@ -229,12 +236,11 @@ def generate_embedding(text: str, model_name: str) -> List[float]:
 
 # Example usage
 if __name__ == "__main__":
-    # Example usage
+    # Example usage - API key will be loaded from .env file
     result = process_documents(
         documents_path="./documents",
         chunk_size=1000,
         chunk_overlap=200,
         embedding_model="gemini",
-        api_key="AIzaSyCNWghUU8om5Na_jltJ3cQKZZ0W4Jmgc4A",
         collection_name="documents"
     )
