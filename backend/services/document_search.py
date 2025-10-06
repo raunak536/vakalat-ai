@@ -12,15 +12,21 @@ import numpy as np
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 from functools import partial
-
-# Import from existing document processor
-from .document_processor import extract_text_from_file
+import sys
+# Import from existing document processor (make path relative)
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from document_processor import extract_text_from_file 
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 from dotenv import load_dotenv
-load_dotenv('backend/.env')
+ENV_PATH = Path(__file__).parent.parent / ".env"
+load_dotenv(ENV_PATH)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DEFAULT_CHROMA_DB_PATH = str(PROJECT_ROOT / "chroma_db")
 
 
 def _generate_embedding_worker(args):
@@ -34,12 +40,10 @@ def _generate_embedding_worker(args):
     Returns:
         Embedding vector or None if error
     """
-    chunk_text, model_name, api_key = args
+    chunk_text, model_name = args
     
     try:
         # Configure Gemini API for this worker process
-        genai.configure(api_key=api_key)
-        
         result = genai.embed_content(
             model=model_name,
             content=chunk_text,
@@ -62,7 +66,7 @@ class DocumentSearchService:
     4. Search ChromaDB for similar documents
     """
     
-    def __init__(self, chroma_db_path: str = "./chroma_db", collection_name: str = "legal_documents", max_workers: Optional[int] = None):
+    def __init__(self, chroma_db_path: str = DEFAULT_CHROMA_DB_PATH, collection_name: str = "legal_documents", max_workers: Optional[int] = None):
         """
         Initialize the document search service.
         
@@ -76,11 +80,9 @@ class DocumentSearchService:
         self.client = None
         self.collection = None
         self.embedding_model = "models/embedding-001"  # Gemini embedding model
-        self.max_workers = max_workers or min(cpu_count(), 8)  # Cap at 8 to avoid API rate limits
+        self.max_workers = max_workers or min(cpu_count(), 10)  # Cap at 8 to avoid API rate limits
         
-        # Store API key for worker processes
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        
+        # Store API key for worker processes        
         logger.info(f"DocumentSearchService initialized with {self.max_workers} workers")
         
     def _initialize_chroma(self):
@@ -140,7 +142,7 @@ class DocumentSearchService:
         
         # Prepare arguments for worker processes
         worker_args = [
-            (chunk, self.embedding_model, self.api_key) 
+            (chunk, self.embedding_model) 
             for chunk in chunks
         ]
         
@@ -210,7 +212,6 @@ class DocumentSearchService:
         """Generate embedding for text using Gemini embedding model."""
         try:
             # Use Gemini's embedding API
-            genai.configure(api_key=self.api_key)
             result = genai.embed_content(
                 model=model_name,
                 content=text,
@@ -291,7 +292,7 @@ class DocumentSearchService:
             return []
 
 
-def search_documents(document_path: str, top_k: int = 5, use_parallel: bool = True, max_workers: Optional[int] = cpu_count()-1) -> List[Dict[str, Any]]:
+def search_documents(document_path: str, top_k: int = 5, use_parallel: bool = True) -> List[Dict[str, Any]]:
     """
     Simple function to search for similar documents.
     
@@ -303,14 +304,14 @@ def search_documents(document_path: str, top_k: int = 5, use_parallel: bool = Tr
     Returns:
         List of similar documents
     """
-    service = DocumentSearchService(max_workers=max_workers)
+    service = DocumentSearchService()
     return service.search_similar_documents(document_path, top_k, use_parallel=use_parallel)
 
 
 # Example usage
 if __name__ == "__main__":
-    # Example: search for documents similar to a specific file
     document_path = "./backend/data/documents/1/232602.json"
+    # Example: search for documents similar to a specific file
     
     if os.path.exists(document_path):
         results = search_documents(document_path, top_k=3, use_parallel=True)
