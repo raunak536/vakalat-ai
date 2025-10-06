@@ -1,0 +1,272 @@
+"""
+FastAPI Chatbot Application for Legal Document Search
+
+This application provides endpoints for:
+1. Text query search - Search for relevant cases using natural language queries
+2. Document upload search - Upload a document and find similar cases
+
+Key FastAPI concepts used:
+- @app.post() decorator: Defines HTTP POST endpoints
+- File uploads: Using UploadFile for document uploads
+- Response models: Simple dict responses (no Pydantic models as requested)
+- Dependency injection: Services are initialized once and reused
+"""
+
+import os
+import tempfile
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
+import uvicorn
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+# Import our existing services
+from services.document_search import DocumentSearchService
+from services.document_processor import extract_text_from_file, generate_embedding
+import chromadb
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Vakalat AI Chatbot",
+    description="Legal document search chatbot using vector similarity",
+    version="1.0.0"
+)
+
+# Add CORS middleware to allow frontend connections
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global variables for services (initialized once)
+search_service = None
+chroma_client = None
+collection = None
+
+def initialize_services():
+    """Initialize ChromaDB and search services once at startup."""
+    global search_service, chroma_client, collection
+    
+    try:
+        # Configure Gemini API
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables")
+        genai.configure(api_key=api_key)
+        
+        # Initialize ChromaDB
+        chroma_db_path = str(Path(__file__).parent.parent / "chroma_db")
+        chroma_client = chromadb.PersistentClient(path=chroma_db_path)
+        collection = chroma_client.get_collection(name="legal_documents")
+        
+        # Initialize search service
+        search_service = DocumentSearchService(
+            chroma_db_path=chroma_db_path,
+            collection_name="legal_documents"
+        )
+        
+        logger.info("Services initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Error initializing services: {e}")
+        raise
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services when the app starts up."""
+    initialize_services()
+
+@app.get("/")
+async def root():
+    """Health check endpoint."""
+    return {"message": "Vakalat AI Chatbot is running", "status": "healthy"}
+
+@app.post("/search/query")
+async def search_by_query(query: str, top_k: int = 5) -> Dict[str, Any]:
+    """
+    Search for relevant legal cases using a text query.
+    
+    FastAPI automatically parses the query parameter from the request body.
+    The function signature defines the expected input parameters.
+    
+    Args:
+        query: Natural language search query
+        top_k: Number of results to return (default: 5)
+        
+    Returns:
+        Dictionary with search results including case details and relevance scores
+    """
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    try:
+        # Generate embedding for the query text
+        # Using the same embedding model as the documents
+        query_embedding = generate_embedding(query, "models/embedding-001")
+        
+        # Search ChromaDB for similar documents
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=['documents', 'metadatas', 'distances']
+        )
+        
+        # Format the response with required fields
+        search_results = []
+        for i in range(len(results['ids'][0])):
+            metadata = results['metadatas'][0][i]
+            distance = results['distances'][0][i]
+            similarity_score = 1 - distance  # Convert distance to similarity
+            
+            result = {
+                "case_title": metadata.get('title', 'Unknown Title'),
+                "case_date": metadata.get('date', 'Unknown Date'),
+                "relevance_score": round(similarity_score, 3),
+                "reason_for_match": f"Semantic similarity based on query: '{query[:100]}...'",
+                "court": metadata.get('court', 'Unknown Court'),
+                "document_id": metadata.get('document_id', 'Unknown'),
+                "document_preview": results['documents'][0][i][:200] + "..." if len(results['documents'][0][i]) > 200 else results['documents'][0][i]
+            }
+            search_results.append(result)
+        
+        return {
+            "query": query,
+            "total_results": len(search_results),
+            "results": search_results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in query search: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+@app.post("/search/document")
+async def search_by_document(
+    file: UploadFile = File(...),
+    top_k: int = 5
+) -> Dict[str, Any]:
+    """
+    Upload a document and find similar legal cases.
+    
+    FastAPI's UploadFile handles file uploads automatically.
+    The File(...) parameter makes it a required file upload.
+    
+    Args:
+        file: Uploaded document file (PDF, DOCX, or TXT)
+        top_k: Number of results to return (default: 5)
+        
+    Returns:
+        Dictionary with search results for similar cases
+    """
+    # Validate file type
+    allowed_extensions = ['.pdf', '.docx', '.doc', '.txt']
+    file_extension = Path(file.filename).suffix.lower()
+    
+    if file_extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+        )
+    
+    # Create temporary file to store uploaded content
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+        try:
+            # Write uploaded content to temporary file
+            content = await file.read()
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+            
+            # Extract text from the uploaded document
+            document_text = extract_text_from_file(temp_file_path)
+            
+            if not document_text.strip():
+                raise HTTPException(status_code=400, detail="No text could be extracted from the document")
+            
+            # Use the existing document search service
+            similar_docs = search_service.search_similar_documents(
+                document_path=temp_file_path,
+                top_k=top_k,
+                use_parallel=True
+            )
+            
+            # Format the response
+            search_results = []
+            for doc in similar_docs:
+                metadata = doc['metadata']
+                similarity_score = doc['similarity']
+                
+                result = {
+                    "case_title": metadata.get('title', 'Unknown Title'),
+                    "case_date": metadata.get('date', 'Unknown Date'),
+                    "relevance_score": round(similarity_score, 3),
+                    "reason_for_match": f"Document similarity based on content analysis",
+                    "court": metadata.get('court', 'Unknown Court'),
+                    "document_id": metadata.get('document_id', 'Unknown'),
+                    "document_preview": doc['document'][:200] + "..." if len(doc['document']) > 200 else doc['document']
+                }
+                search_results.append(result)
+            
+            return {
+                "uploaded_file": file.filename,
+                "total_results": len(search_results),
+                "results": search_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in document search: {e}")
+            raise HTTPException(status_code=500, detail=f"Document search failed: {str(e)}")
+        
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+
+@app.get("/health")
+async def health_check():
+    """Detailed health check endpoint."""
+    try:
+        # Check if services are properly initialized
+        if not collection:
+            return {"status": "unhealthy", "error": "ChromaDB collection not initialized"}
+        
+        # Test a simple query to verify everything works
+        test_results = collection.query(
+            query_embeddings=[[0.0] * 768],  # Dummy embedding
+            n_results=1
+        )
+        
+        return {
+            "status": "healthy",
+            "services": {
+                "chromadb": "connected",
+                "gemini_api": "configured",
+                "collection": "accessible"
+            },
+            "total_documents": collection.count()
+        }
+        
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
+
+if __name__ == "__main__":
+    # Run the FastAPI app using uvicorn
+    # uvicorn is an ASGI server that can run FastAPI applications
+    uvicorn.run(
+        "app:app",  # app:app means the 'app' variable in this file
+        host="0.0.0.0",  # Listen on all interfaces
+        port=8000,  # Default port
+        reload=True  # Auto-reload on code changes (development only)
+    )
