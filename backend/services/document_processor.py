@@ -136,6 +136,7 @@ def process_documents(
         else:
             logger.info(f"Loading CSV mapping from: {csv_mapping_path}")
         csv_mapping = load_csv_mapping(csv_mapping_path, court_filter)
+        #print(csv_mapping)
     else:
         logger.warning("No CSV mapping provided or file not found. Using JSON metadata only.")
     
@@ -178,7 +179,6 @@ def process_documents(
         if file_path.is_file() and file_path.suffix.lower() in ['.pdf', '.docx', '.doc', '.json']:
             # Get document ID for filtering
             doc_id = file_path.stem
-            
             # If court filter is applied and CSV mapping exists, check if document should be processed
             if court_filter and csv_mapping and doc_id not in csv_mapping:
                 logger.debug(f"Skipping document {file_path} - not found in filtered CSV mapping")
@@ -237,38 +237,58 @@ def process_documents(
     
     logger.info(f"Created {len(chunks)} text chunks")
     
-    # Generate embeddings and store in ChromaDB
+    # Generate embeddings and store in ChromaDB (micro-batching)
     logger.info("Generating embeddings and storing in vector database...")
-    texts = []
-    ids = []
-    metadatas = []
-    embeddings = []  # ← Add this missing variable
-    
+
+    BATCH_SIZE = 3000  # safely under Chroma's max batch size
+    texts: List[str] = []
+    ids: List[str] = []
+    metadatas: List[Dict[str, Any]] = []
+    embeddings: List[List[float]] = []
+    total_processed = 0
+
+    def flush_batch() -> None:
+        nonlocal total_processed
+        if not texts:
+            return
+        try:
+            collection.add(
+                documents=texts,
+                ids=ids,
+                metadatas=metadatas,
+                embeddings=embeddings
+            )
+            total_processed += len(texts)
+            logger.info(f"Stored {len(texts)} embeddings (total: {total_processed})")
+        except Exception as e:
+            logger.error(f"Error adding batch to Chroma: {e}")
+        finally:
+            texts.clear()
+            ids.clear()
+            metadatas.clear()
+            embeddings.clear()
+
     for i, chunk in enumerate(chunks):
         try:
             embedding = generate_embedding(chunk['text'], embedding_model_name)
             texts.append(chunk['text'])
             ids.append(chunk['id'])
             metadatas.append(chunk['metadata'])
-            embeddings.append(embedding)  # ← Add this missing line
-            
+            embeddings.append(embedding)
+
             if (i + 1) % 10 == 0:
                 logger.info(f"Processed {i + 1}/{len(chunks)} chunks")
+
+            if len(texts) >= BATCH_SIZE:
+                flush_batch()
         except Exception as e:
             logger.error(f"Error generating embedding for chunk {i}: {e}")
             continue
-    
-    # Add to ChromaDB collection
-    if texts:
-        collection.add(
-            documents=texts,
-            ids=ids,
-            metadatas=metadatas,
-            embeddings=embeddings  # ← Now this will work
-        )
-        logger.info(f"Successfully stored {len(texts)} embeddings in vector database")
-    
-    logger.info("✅ Embeddings stored in vector database successfully!")
+
+    # Flush any remaining items
+    flush_batch()
+
+    logger.info(f"✅ Embeddings stored in vector database successfully! Total processed: {total_processed}")
     
     return {
         "message": "Documents processed successfully",
@@ -468,8 +488,9 @@ def generate_embedding(text: str, model_name: str) -> List[float]:
 # Example usage
 if __name__ == "__main__":
     # Example usage - API key will be loaded from .env file
+
     result = process_documents(
-        documents_path="./backend/data/documents",
+        documents_path="./backend/data/ikanoon_data",
         chunk_size=1000,
         chunk_overlap=200,
         embedding_model="gemini",
