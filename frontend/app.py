@@ -234,9 +234,9 @@ def perform_search(search_clicks, sugg1_clicks, sugg2_clicks, query_value):
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == 'suggestion-1':
-        query = "Wrongful tenant eviction cases in Michigan"
+        query = "Cases relevant to Aadhar Card?"
     elif button_id == 'suggestion-2':
-        query = "What is the adverse domination doctrine"
+        query = "When did right to privacy become a fundamental right?"
     else:
         query = query_value
     
@@ -284,7 +284,7 @@ def perform_query_search(query):
     try:
         response = requests.post(
             f"{BACKEND_URL}/search/query",
-            json={"query": query, "top_k": 5},
+            params={"query": query, "top_k": 5},
             timeout=30
         )
         
@@ -415,10 +415,9 @@ def update_search_input(sugg1_clicks, sugg2_clicks):
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == 'suggestion-1':
-        return "Wrongful tenant eviction cases in Michigan"
+        return "Cases relevant to Aadhar Card?"
     elif button_id == 'suggestion-2':
-        return "What is the adverse domination doctrine"
-    
+        return "When did right to privacy become a fundamental right?"    
     return no_update
 
 if __name__ == '__main__':
