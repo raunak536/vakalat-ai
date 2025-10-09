@@ -69,7 +69,7 @@ def initialize_services():
         genai.configure(api_key=api_key)
         
         # Initialize ChromaDB
-        chroma_db_path = str(Path(__file__).parent.parent / "chroma_db")
+        chroma_db_path = str(Path(__file__).parent / "chroma_db")
         chroma_client = chromadb.PersistentClient(path=chroma_db_path)
         collection = chroma_client.get_collection(name="legal_documents")
         

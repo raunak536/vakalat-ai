@@ -25,7 +25,7 @@ ENV_PATH = Path(__file__).parent.parent / ".env"
 load_dotenv(ENV_PATH)
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_CHROMA_DB_PATH = str(PROJECT_ROOT / "chroma_db")
 
 

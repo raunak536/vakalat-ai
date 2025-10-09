@@ -142,8 +142,9 @@ def process_documents(
     
     # Initialize ChromaDB
     logger.info("Initializing ChromaDB vector database...")
-    os.makedirs("./chroma_db", exist_ok=True)  # ← Ensure directory exists
-    client = chromadb.PersistentClient(path="./chroma_db")  # ← Use PersistentClient instead
+    chroma_db_path = "./chroma_db"
+    os.makedirs(chroma_db_path, exist_ok=True)  # ← Ensure directory exists
+    client = chromadb.PersistentClient(path=chroma_db_path)  # ← Use PersistentClient instead
     
     # Get or create collection
     try:
@@ -295,7 +296,7 @@ def process_documents(
         "processed_docs": len(documents),
         "total_chunks": len(chunks),
         "collection_name": collection_name,
-        "chroma_db_path": "./chroma_db"
+        "chroma_db_path": chroma_db_path
     }
 
 

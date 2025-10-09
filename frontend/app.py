@@ -16,9 +16,6 @@ import plotly.graph_objects as go
 import requests
 import base64
 import io
-import json
-from datetime import datetime
-import pandas as pd
 
 # Initialize Dash app with Bootstrap theme for modern styling
 app = dash.Dash(
@@ -31,7 +28,7 @@ app = dash.Dash(
 )
 
 # Backend API configuration
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "http://backend:8000"
 
 # Define the layout
 app.layout = dbc.Container([
