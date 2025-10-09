@@ -125,23 +125,32 @@ async def search_by_query(query: str, top_k: int = 5) -> Dict[str, Any]:
             include=['documents', 'metadatas', 'distances']
         )
         
-        # Format the response with required fields
-        search_results = []
+        # Format the response with required fields and deduplicate by title keeping max relevance
+        best_by_title = {}
         for i in range(len(results['ids'][0])):
             metadata = results['metadatas'][0][i]
             distance = results['distances'][0][i]
             similarity_score = 1 - distance  # Convert distance to similarity
-            
-            result = {
-                "case_title": metadata.get('title', 'Unknown Title'),
+
+            title = metadata.get('title', 'Unknown Title')
+            preview_text = results['documents'][0][i]
+            preview = preview_text[:200] + "..." if len(preview_text) > 200 else preview_text
+
+            current = {
+                "case_title": title,
                 "case_date": metadata.get('date', 'Unknown Date'),
                 "relevance_score": round(similarity_score, 3),
                 "reason_for_match": f"Semantic similarity based on query: '{query[:100]}...'",
                 "court": metadata.get('court', 'Unknown Court'),
                 "document_id": metadata.get('document_id', 'Unknown'),
-                "document_preview": results['documents'][0][i][:200] + "..." if len(results['documents'][0][i]) > 200 else results['documents'][0][i]
+                "document_preview": preview
             }
-            search_results.append(result)
+
+            if title not in best_by_title or current["relevance_score"] > best_by_title[title]["relevance_score"]:
+                best_by_title[title] = current
+
+        # Sort by relevance descending and trim to top_k
+        search_results = sorted(best_by_title.values(), key=lambda r: r["relevance_score"], reverse=True)[:top_k]
         
         return {
             "query": query,
