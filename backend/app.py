@@ -181,7 +181,7 @@ async def search_by_document(
         Dictionary with search results for similar cases
     """
     # Validate file type
-    allowed_extensions = ['.pdf', '.docx', '.doc', '.txt']
+    allowed_extensions = ['.pdf', '.docx', '.doc', '.txt', '.json']
     file_extension = Path(file.filename).suffix.lower()
     
     if file_extension not in allowed_extensions:
@@ -191,65 +191,73 @@ async def search_by_document(
         )
     
     # Create temporary file to store uploaded content
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
-        try:
-            # Write uploaded content to temporary file
-            content = await file.read()
+    temp_file_path = None
+    try:
+        # Read file content first
+        content = await file.read()
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
             temp_file.write(content)
             temp_file_path = temp_file.name
+        
+        # Extract text from the uploaded document
+        document_text = extract_text_from_file(temp_file_path)
+        
+        if not document_text.strip():
+            raise HTTPException(status_code=400, detail="No text could be extracted from the document")
+        
+        # Use the existing document search service (fetch more chunks to ensure unique documents)
+        similar_docs = search_service.search_similar_documents(
+            document_path=temp_file_path,
+            top_k=top_k,
+            use_parallel=True,
+            retrieval_multiplier=4  # Fetch 20 chunks to ensure unique documents
+        )
+        
+        # Format the response and deduplicate by title keeping max relevance
+        best_by_title = {}
+        for doc in similar_docs:
+            metadata = doc['metadata']
+            similarity_score = doc['similarity']
+            title = metadata.get('title', 'Unknown Title')
             
-            # Extract text from the uploaded document
-            document_text = extract_text_from_file(temp_file_path)
-            
-            if not document_text.strip():
-                raise HTTPException(status_code=400, detail="No text could be extracted from the document")
-            
-            # Use the existing document search service (fetch more chunks to ensure unique documents)
-            similar_docs = search_service.search_similar_documents(
-                document_path=temp_file_path,
-                top_k=top_k,
-                use_parallel=True,
-                retrieval_multiplier=4  # Fetch 20 chunks to ensure unique documents
-            )
-            
-            # Format the response and deduplicate by title keeping max relevance
-            best_by_title = {}
-            for doc in similar_docs:
-                metadata = doc['metadata']
-                similarity_score = doc['similarity']
-                title = metadata.get('title', 'Unknown Title')
-                
-                result = {
-                    "case_title": title,
-                    "case_date": metadata.get('date', 'Unknown Date'),
-                    "relevance_score": round(similarity_score, 3),
-                    "reason_for_match": f"Document similarity based on content analysis",
-                    "court": metadata.get('court', 'Unknown Court'),
-                    "document_id": metadata.get('document_id', 'Unknown'),
-                    "document_preview": doc['document'][:200] + "..." if len(doc['document']) > 200 else doc['document']
-                }
-                
-                # Keep only the highest scoring chunk per title
-                if title not in best_by_title or result["relevance_score"] > best_by_title[title]["relevance_score"]:
-                    best_by_title[title] = result
-            
-            # Sort by relevance descending and trim to top_k
-            search_results = sorted(best_by_title.values(), key=lambda r: r["relevance_score"], reverse=True)[:top_k]
-            
-            return {
-                "uploaded_file": file.filename,
-                "total_results": len(search_results),
-                "results": search_results
+            result = {
+                "case_title": title,
+                "case_date": metadata.get('date', 'Unknown Date'),
+                "relevance_score": round(similarity_score, 3),
+                "reason_for_match": f"Document similarity based on content analysis",
+                "court": metadata.get('court', 'Unknown Court'),
+                "document_id": metadata.get('document_id', 'Unknown'),
+                "document_preview": doc['document'][:200] + "..." if len(doc['document']) > 200 else doc['document']
             }
             
-        except Exception as e:
-            logger.error(f"Error in document search: {e}")
-            raise HTTPException(status_code=500, detail=f"Document search failed: {str(e)}")
+            # Keep only the highest scoring chunk per title
+            if title not in best_by_title or result["relevance_score"] > best_by_title[title]["relevance_score"]:
+                best_by_title[title] = result
         
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_file_path):
+        # Sort by relevance descending and trim to top_k
+        search_results = sorted(best_by_title.values(), key=lambda r: r["relevance_score"], reverse=True)[:top_k]
+        
+        return {
+            "uploaded_file": file.filename,
+            "total_results": len(search_results),
+            "results": search_results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in document search: {e}")
+        raise HTTPException(status_code=500, detail=f"Document search failed: {str(e)}")
+    
+    finally:
+        # Clean up temporary file with proper error handling
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
                 os.unlink(temp_file_path)
+            except PermissionError as e:
+                logger.warning(f"Could not delete temporary file {temp_file_path}: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error deleting temporary file {temp_file_path}: {e}")
 
 @app.get("/health")
 async def health_check():
