@@ -8,6 +8,4 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-RUN rm -rf data
-
 CMD ["python", "app.py"]

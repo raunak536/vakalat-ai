@@ -27,6 +27,33 @@ app = dash.Dash(
     suppress_callback_exceptions=True
 )
 
+# Add custom CSS for PDF link hover effects
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            .pdf-link:hover {
+                color: #007bff !important;
+                text-decoration: underline !important;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
+
 # Backend API configuration
 BACKEND_URL = "http://backend:8000"
 
@@ -282,7 +309,7 @@ def perform_query_search(query):
         response = requests.post(
             f"{BACKEND_URL}/search/query",
             params={"query": query, "top_k": 5},
-            timeout=30
+            timeout=180
         )
         
         if response.status_code == 200:
@@ -310,7 +337,7 @@ def perform_document_search_api(file_data):
             f"{BACKEND_URL}/search/document",
             files=files,
             data={'top_k': 5},
-            timeout=60
+            timeout=180
         )
         
         if response.status_code == 200:
@@ -336,10 +363,27 @@ def create_results_display(data, search_type):
     for i, result in enumerate(results):
         card = dbc.Card([
             dbc.CardBody([
-                html.H5(
-                    result.get('case_title', 'Unknown Title'),
-                    className="card-title",
-                    style={"color": "#2c3e50", "marginBottom": "10px"}
+                html.H5([
+                    html.A(
+                        [
+                            result.get('case_title', 'Unknown Title'),
+                            html.I(
+                                className="fas fa-external-link-alt",
+                                style={"marginLeft": "8px", "fontSize": "0.8em", "opacity": "0.7"}
+                            ) if result.get('pdf_url') else None
+                        ],
+                        href=result.get('pdf_url', '#'),
+                        target="_blank" if result.get('pdf_url') else None,
+                        style={
+                            "color": "#2c3e50", 
+                            "textDecoration": "none",
+                            "cursor": "pointer" if result.get('pdf_url') else "default"
+                        },
+                        className="pdf-link" if result.get('pdf_url') else None
+                    )
+                ],
+                className="card-title",
+                style={"marginBottom": "10px"}
                 ),
                 html.P([
                     html.Strong("Court: "), result.get('court', 'Unknown Court'), html.Br(),
