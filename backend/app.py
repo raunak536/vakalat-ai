@@ -197,10 +197,10 @@ async def search_by_query(query: str, top_k: int = 5) -> Dict[str, Any]:
         # Using the same embedding model as the documents
         query_embedding = generate_embedding(query, "models/embedding-001")
         
-        # Search ChromaDB for similar documents
+        # Search ChromaDB for similar documents (fetch more chunks to ensure unique documents)
         results = collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
+            n_results=top_k * 4,  # Fetch 20 chunks to ensure we get unique documents
             include=['documents', 'metadatas', 'distances']
         )
         
@@ -293,20 +293,21 @@ async def search_by_document(
             temp_file.write(content)
             temp_file_path = temp_file.name
         
-            # Extract text from the uploaded document
+        # Extract text from the uploaded document
         document_text = extract_text_from_file(temp_file_path)
-            
+        
         if not document_text.strip():
             raise HTTPException(status_code=400, detail="No text could be extracted from the document")
         
-            # Use the existing document search service
+        # Use the existing document search service (fetch more chunks to ensure unique documents)
         similar_docs = search_service.search_similar_documents(
             document_path=temp_file_path,
             top_k=top_k,
-            use_parallel=True
+            use_parallel=True,
+            retrieval_multiplier=4  # Fetch 20 chunks to ensure unique documents
         )
-            
-        # Format the response
+        
+        # Format the response and deduplicate by title keeping max relevance
         best_by_title = {}
         for doc in similar_docs:
             metadata = doc['metadata']
@@ -353,9 +354,14 @@ async def search_by_document(
         raise HTTPException(status_code=500, detail=f"Document search failed: {str(e)}")
     
     finally:
-        # Clean up temporary file
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
+        # Clean up temporary file with proper error handling
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except PermissionError as e:
+                logger.warning(f"Could not delete temporary file {temp_file_path}: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error deleting temporary file {temp_file_path}: {e}")
 
 @app.get("/health")
 async def health_check():
