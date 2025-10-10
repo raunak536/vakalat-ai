@@ -228,7 +228,8 @@ class DocumentSearchService:
         document_path: str, 
         top_k: int = 5,
         chunk_size: int = 1000,
-        use_parallel: bool = True
+        use_parallel: bool = True,
+        retrieval_multiplier: int = 4
     ) -> List[Dict[str, Any]]:
         """
         Find documents similar to the input document.
@@ -263,12 +264,13 @@ class DocumentSearchService:
         else:
             query_embedding = self._generate_document_embedding(text)
         
-        # Search for similar documents
-        logger.info(f"Searching for top {top_k} similar documents...")
+        # Search for similar documents (fetch more chunks to ensure unique documents)
+        initial_results = top_k * retrieval_multiplier
+        logger.info(f"Searching for top {initial_results} similar documents (will filter to {top_k} unique)...")
         try:
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=top_k,
+                n_results=initial_results,
                 include=['documents', 'metadatas', 'distances']
             )
             

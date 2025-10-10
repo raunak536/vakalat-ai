@@ -118,10 +118,10 @@ async def search_by_query(query: str, top_k: int = 5) -> Dict[str, Any]:
         # Using the same embedding model as the documents
         query_embedding = generate_embedding(query, "models/embedding-001")
         
-        # Search ChromaDB for similar documents
+        # Search ChromaDB for similar documents (fetch more chunks to ensure unique documents)
         results = collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
+            n_results=top_k * 4,  # Fetch 20 chunks to ensure we get unique documents
             include=['documents', 'metadatas', 'distances']
         )
         
@@ -204,21 +204,23 @@ async def search_by_document(
             if not document_text.strip():
                 raise HTTPException(status_code=400, detail="No text could be extracted from the document")
             
-            # Use the existing document search service
+            # Use the existing document search service (fetch more chunks to ensure unique documents)
             similar_docs = search_service.search_similar_documents(
                 document_path=temp_file_path,
                 top_k=top_k,
-                use_parallel=True
+                use_parallel=True,
+                retrieval_multiplier=4  # Fetch 20 chunks to ensure unique documents
             )
             
-            # Format the response
-            search_results = []
+            # Format the response and deduplicate by title keeping max relevance
+            best_by_title = {}
             for doc in similar_docs:
                 metadata = doc['metadata']
                 similarity_score = doc['similarity']
+                title = metadata.get('title', 'Unknown Title')
                 
                 result = {
-                    "case_title": metadata.get('title', 'Unknown Title'),
+                    "case_title": title,
                     "case_date": metadata.get('date', 'Unknown Date'),
                     "relevance_score": round(similarity_score, 3),
                     "reason_for_match": f"Document similarity based on content analysis",
@@ -226,7 +228,13 @@ async def search_by_document(
                     "document_id": metadata.get('document_id', 'Unknown'),
                     "document_preview": doc['document'][:200] + "..." if len(doc['document']) > 200 else doc['document']
                 }
-                search_results.append(result)
+                
+                # Keep only the highest scoring chunk per title
+                if title not in best_by_title or result["relevance_score"] > best_by_title[title]["relevance_score"]:
+                    best_by_title[title] = result
+            
+            # Sort by relevance descending and trim to top_k
+            search_results = sorted(best_by_title.values(), key=lambda r: r["relevance_score"], reverse=True)[:top_k]
             
             return {
                 "uploaded_file": file.filename,
